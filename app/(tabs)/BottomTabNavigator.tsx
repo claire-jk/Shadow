@@ -2,6 +2,7 @@ import { FontAwesome5, Ionicons, MaterialCommunityIcons } from '@expo/vector-ico
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import React from 'react';
 import { Platform, Text, View } from 'react-native';
+import GreenParkEngine from './GreenParkingEngine';
 import HomeScreen from './HomeScreen';
 
 const Placeholder = ({ route }: any) => (
@@ -33,7 +34,7 @@ export default function BottomTabNavigator() {
       })}
     >
       <Tab.Screen name="首頁" component={HomeScreen} />
-      <Tab.Screen name="綠色停車" component={Placeholder} />
+      <Tab.Screen name="綠色停車" component={GreenParkEngine} />
       <Tab.Screen name="行人路徑" component={Placeholder} />
       <Tab.Screen name="公車查詢" component={Placeholder} />
       <Tab.Screen name="待轉指引" component={Placeholder} />
