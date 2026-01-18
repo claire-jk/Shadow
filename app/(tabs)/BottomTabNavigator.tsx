@@ -3,6 +3,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import React from 'react';
 import { Platform, Text, View } from 'react-native';
 import Bus from './Bus';
+import CoolTurn from './CoolTurn';
 import GreenParkEngine from './GreenParkingEngine';
 import HomeScreen from './HomeScreen';
 import SideWalk from './SideWalk';
@@ -30,7 +31,7 @@ export default function BottomTabNavigator() {
         },
         tabBarActiveTintColor: '#3B82F6',
         tabBarInactiveTintColor: '#94A3B8',
-        tabBarLabelStyle: { fontFamily: 'ZenKurenaido', fontSize: 12, marginBottom: Platform.OS === 'ios' ? 0 : 5 },
+        tabBarLabelStyle: { fontFamily: 'Zen', fontSize: 12, marginBottom: Platform.OS === 'ios' ? 0 : 5 },
         tabBarStyle: { height: Platform.OS === 'ios' ? 88 : 70, paddingTop: 10, backgroundColor: '#FFFFFF', borderTopWidth: 0 },
         headerShown: false,
       })}
@@ -39,7 +40,7 @@ export default function BottomTabNavigator() {
       <Tab.Screen name="綠色停車" component={GreenParkEngine} />
       <Tab.Screen name="行人路徑" component={SideWalk} />
       <Tab.Screen name="公車查詢" component={Bus} />
-      <Tab.Screen name="待轉指引" component={Placeholder} />
+      <Tab.Screen name="待轉指引" component={CoolTurn} />
     </Tab.Navigator>
   );
 }
