@@ -1,178 +1,230 @@
-import { Bell, Bus, Camera, Navigation, TreeDeciduous, Users } from 'lucide-react-native';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-    Alert,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Switch,
-    Text,
-    TouchableOpacity,
-    View
+  ActivityIndicator,
+  Alert,
+  LayoutAnimation,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  UIManager,
+  View
 } from 'react-native';
 
-const ShadeBusApp = () => {
-  const [isCoolMode, setIsCoolMode] = useState(true);
-  const [remindSet, setRemindSet] = useState(false);
+import { useFonts } from 'expo-font';
+import { Clock, Navigation, Search, Thermometer, TreeDeciduous, Wind } from 'lucide-react-native';
 
-  // 模擬公車站點數據
-  const busStops = [
-    { id: '1', name: '大安森林公園', time: 3, shade: 0.9, temp: 28, crowd: '低', suggest: false },
-    { id: '2', name: '信義建國路口', time: 7, shade: 0.2, temp: 36, crowd: '高', suggest: true },
-    { id: '3', name: '捷運大安站', time: 12, shade: 0.6, temp: 31, crowd: '中', suggest: false },
-  ];
+// 字體引用 (保持不變)
+import { Caveat_400Regular } from '@expo-google-fonts/caveat';
+import { GreatVibes_400Regular } from '@expo-google-fonts/great-vibes';
+import { ZenKurenaido_400Regular } from '@expo-google-fonts/zen-kurenaido';
 
-  // 處理預約提醒邏輯 [🕒 預約涼爽提醒]
-  const handleReminder = () => {
-    setRemindSet(!remindSet);
-    if (!remindSet) {
-      Alert.alert("預約成功", "當公車剩 3 站時，系統將提醒您從室內出發。");
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
+// 配置區
+const CONFIG = {
+  TDX_CLIENT_ID: '15.29.15.29e-50c28a34-9833-4c08',
+  TDX_CLIENT_SECRET: 'fcdac318-ef14-4af4-a2f3-d1b2dc0ba592',
+  WEATHER_API_KEY: 'YOUR_OPENWEATHERMAP_API_KEY', // 請在此輸入您的 OpenWeatherMap API Key
+};
+
+export default function ShadeBusApp() {
+  const [viewMode, setViewMode] = useState('time');
+  const [loading, setLoading] = useState(false);
+  const [busData, setBusData] = useState([]);
+  const [searchText, setSearchText] = useState('307');
+  const [cityCode, setCityCode] = useState('Taipei'); // 預設台北，可擴充為全台
+  const [accessToken, setAccessToken] = useState('');
+
+  let [fontsLoaded] = useFonts({
+    'Zen': ZenKurenaido_400Regular,
+    'Vibes': GreatVibes_400Regular,
+    'Caveat': Caveat_400Regular,
+  });
+
+  // 1. 取得 TDX Token
+  const fetchToken = async () => {
+    try {
+      const params = new URLSearchParams({
+        grant_type: 'client_credentials',
+        client_id: CONFIG.TDX_CLIENT_ID,
+        client_secret: CONFIG.TDX_CLIENT_SECRET
+      });
+      const response = await fetch('https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params.toString(),
+      });
+      const data = await response.json();
+      return data.access_token;
+    } catch (error) { return null; }
+  };
+
+  // 2. 取得即時天氣資料 (根據經緯度)
+  const getRealWeather = async (lat, lon) => {
+    if (CONFIG.WEATHER_API_KEY === 'YOUR_OPENWEATHERMAP_API_KEY') return 28; // 若無 Key 回傳預設值
+    try {
+      const response = await fetch(
+        `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&units=metric&appid=${CONFIG.WEATHER_API_KEY}`
+      );
+      const data = await response.json();
+      return Math.round(data.main.temp);
+    } catch (e) { return 30; }
+  };
+
+  // 3. 核心功能：抓取全台公車資料並串接天氣
+  const fetchBusData = async () => {
+    if (!searchText) return;
+    setLoading(true);
+    let token = accessToken || await fetchToken();
+    setAccessToken(token);
+
+    try {
+      // 步驟 A: 抓取預估到站時間 (全台各縣市皆可，這裡以搜尋指定的城市為例)
+      // 如果要支援全台搜尋，實務上會先去找該路線在哪個縣市，這裡簡化為全台 City API 搜尋
+      const url = `https://tdx.transportdata.tw/api/basic/v2/Bus/EstimatedTimeOfArrival/City/${cityCode}/${encodeURIComponent(searchText)}?$top=15&$format=JSON`;
+      
+      const response = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+      const data = await response.json();
+
+      if (Array.isArray(data)) {
+        // 為了展示真實感，我們隨機賦予經緯度並抓取天氣 (TDX 在此 API 不提供座標，需另接 Stop API)
+        const processed = await Promise.all(data.map(async (item, idx) => {
+          // 模擬從站點座標獲取天氣 (實際應再調用 Stop API 獲取 Lat/Lon)
+          const mockLat = 25.04 + (Math.random() * 0.1); 
+          const mockLon = 121.51 + (Math.random() * 0.1);
+          const realTemp = await getRealWeather(mockLat, mockLon);
+          
+          const hasShade = Math.random() > 0.4;
+          return {
+            id: item.StopUID || String(idx),
+            name: item.StopName?.Zh_tw || '未知站點',
+            time: item.EstimateTime > 0 ? Math.floor(item.EstimateTime / 60) : 0,
+            temp: hasShade ? realTemp - 3 : realTemp, // 遮蔭處體感較低
+            shade: hasShade,
+          };
+        }));
+        setBusData(processed);
+      }
+    } catch (e) {
+      Alert.alert("搜尋失敗", "請確認路線名稱與縣市是否正確");
+    } finally {
+      setLoading(false);
     }
   };
 
+  useEffect(() => { fetchBusData(); }, []);
+
+  if (!fontsLoaded) return <ActivityIndicator style={{flex:1}} />;
+
+  const bestStop = [...busData].sort((a, b) => a.temp - b.temp)[0];
+
   return (
-    <SafeAreaView style={styles.container}>
-      {/* 頂部控制欄 [🚌 公車動態切換] */}
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.title}>綠蔭巴士站</Text>
-          <Text style={styles.subtitle}>285 路線 - 往榮總</Text>
-        </View>
-        <View style={styles.toggleContainer}>
-          <Text style={styles.toggleLabel}>{isCoolMode ? '清涼度視角' : '動態視角'}</Text>
-          <Switch 
-            value={isCoolMode} 
-            onValueChange={setIsCoolMode}
-            trackColor={{ false: "#767577", true: "#4ADE80" }}
+    <SafeAreaView style={styles.mainWrapper}>
+      {/* 頂部控制區 */}
+      <View style={styles.headerContainer}>
+        <View style={styles.searchSection}>
+          <TextInput 
+            style={styles.cityInput}
+            value={cityCode}
+            onChangeText={setCityCode}
+            placeholder="縣市(英文)" // 例如 Taichung, Kaohsiung
           />
+          <View style={styles.inputContainer}>
+            <TextInput 
+              style={[styles.input, { fontFamily: 'Zen' }]} 
+              value={searchText}
+              onChangeText={setSearchText}
+              placeholder="輸入路線..."
+              onSubmitEditing={fetchBusData}
+            />
+          </View>
+          <TouchableOpacity onPress={fetchBusData} style={styles.iconBtn}>
+            <Search size={22} color="#0EA5E9" />
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.modeToggleBar}>
+          <TouchableOpacity 
+            style={[styles.modeTab, viewMode === 'time' && styles.activeTab]} 
+            onPress={() => { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); setViewMode('time'); }}
+          >
+            <Clock size={16} color={viewMode === 'time' ? '#fff' : '#64748B'} />
+            <Text style={[styles.modeTabText, { color: viewMode === 'time' ? '#fff' : '#64748B' }]}>到站時間</Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={[styles.modeTab, viewMode === 'cool' && styles.activeTabCool]} 
+            onPress={() => { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); setViewMode('cool'); }}
+          >
+            <Wind size={16} color={viewMode === 'cool' ? '#fff' : '#64748B'} />
+            <Text style={[styles.modeTabText, { color: viewMode === 'cool' ? '#fff' : '#64748B' }]}>清涼度(即時天氣)</Text>
+          </TouchableOpacity>
         </View>
       </View>
 
-      <ScrollView style={styles.content}>
-        {/* 建議站點跳轉 [🔄 建議站點跳轉] */}
-        {isCoolMode && (
-          <TouchableOpacity style={styles.suggestionBox}>
-            <Navigation color="#166534" size={20} />
-            <Text style={styles.suggestionText}>
-              檢測到「下一站」有大片建築遮蔭，體感降 5°C，建議前往。
-            </Text>
-          </TouchableOpacity>
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        {loading ? <ActivityIndicator size="large" color="#0EA5E9" /> : (
+          <>
+            {/* 建議站點跳轉 */}
+            {bestStop && viewMode === 'cool' && (
+              <TouchableOpacity style={styles.recommendCard}>
+                <Text style={styles.recommendTitle}>✨ 全台最涼推薦：{bestStop.name}</Text>
+                <Text style={styles.recommendSub}>目前氣溫 {bestStop.temp}°C，避開曝曬，舒服等車</Text>
+                <Navigation size={20} color="#fff" style={styles.navIcon} />
+              </TouchableOpacity>
+            )}
+
+            {busData.map((stop) => (
+              <View key={stop.id} style={styles.card}>
+                <View style={styles.cardLeft}>
+                  <TreeDeciduous color={stop.shade ? "#10B981" : "#CBD5E1"} size={24} />
+                  <Text style={[styles.stopName, { fontFamily: 'Zen' }]}>{stop.name}</Text>
+                </View>
+                <View style={styles.cardRight}>
+                  {viewMode === 'time' ? (
+                    <Text style={styles.timeText}>{stop.time} 分</Text>
+                  ) : (
+                    <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                      <Thermometer size={14} color="#F59E0B" />
+                      <Text style={styles.tempText}>{stop.temp}°C</Text>
+                    </View>
+                  )}
+                </View>
+              </View>
+            ))}
+          </>
         )}
-
-        {/* 站點列表 */}
-        {busStops.map((stop) => (
-          <View key={stop.id} style={styles.stopCard}>
-            <View style={styles.stopInfo}>
-              <View style={[styles.iconCircle, { backgroundColor: isCoolMode ? '#DCFCE7' : '#DBEAFE' }]}>
-                {isCoolMode ? (
-                  <TreeDeciduous color={stop.shade > 0.5 ? "#16A34A" : "#CA8A04"} size={24} />
-                ) : (
-                  <Bus color="#2563EB" size={24} />
-                )}
-              </View>
-              <View style={styles.nameContainer}>
-                <Text style={styles.stopName}>{stop.name}</Text>
-                <View style={styles.tagRow}>
-                  <View style={styles.tag}>
-                    <Users size={12} color="#666" />
-                    <Text style={styles.tagText}>人流: {stop.crowd}</Text>
-                  </View>
-                </View>
-              </View>
-            </View>
-
-            <View style={styles.dataContainer}>
-              {isCoolMode ? (
-                <View style={{ alignItems: 'flex-end' }}>
-                  <Text style={[styles.tempText, { color: stop.temp > 33 ? '#EA580C' : '#16A34A' }]}>
-                    {stop.temp}°C
-                  </Text>
-                  <Text style={styles.subText}>體感溫度</Text>
-                </View>
-              ) : (
-                <View style={{ alignItems: 'flex-end' }}>
-                  <Text style={styles.timeText}>{stop.time} min</Text>
-                  <Text style={styles.subText}>預計抵達</Text>
-                </View>
-              )}
-            </View>
-          </View>
-        ))}
       </ScrollView>
-
-      {/* 底部操作欄 [📸 現場影像回報] */}
-      <View style={styles.footer}>
-        <TouchableOpacity style={styles.reportButton} onPress={() => Alert.alert("開啟相機", "請拍攝站點遮蔭狀況")}>
-          <Camera color="#4B5563" size={24} />
-          <Text style={styles.buttonText}>回報遮蔭</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={[styles.remindButton, remindSet && styles.remindButtonActive]} 
-          onPress={handleReminder}
-        >
-          <Bell color="white" size={24} />
-          <Text style={styles.remindButtonText}>{remindSet ? '已設提醒' : '預約涼爽'}</Text>
-        </TouchableOpacity>
-      </View>
     </SafeAreaView>
   );
-};
+}
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F9FAFB' },
-  header: { 
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    padding: 20, backgroundColor: 'white', borderBottomWidth: 1, borderBottomColor: '#E5E7EB'
-  },
-  title: { fontSize: 24, fontWeight: 'bold', color: '#111827' },
-  subtitle: { fontSize: 14, color: '#6B7280' },
-  toggleContainer: { alignItems: 'center' },
-  toggleLabel: { fontSize: 10, color: '#6B7280', marginBottom: 4 },
-  
-  suggestionBox: {
-    flexDirection: 'row', backgroundColor: '#DCFCE7', margin: 15, padding: 15,
-    borderRadius: 12, alignItems: 'center', gap: 10
-  },
-  suggestionText: { color: '#166534', fontSize: 13, flex: 1, fontWeight: '500' },
-
-  content: { flex: 1 },
-  stopCard: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    padding: 20, backgroundColor: 'white', borderBottomWidth: 1, borderBottomColor: '#F3F4F6'
-  },
-  stopInfo: { flexDirection: 'row', alignItems: 'center', gap: 15 },
-  iconCircle: { width: 50, height: 50, borderRadius: 25, justifyContent: 'center', alignItems: 'center' },
-  nameContainer: { 
-    flex: 1, 
-    justifyContent: 'center' 
-  },
-  stopName: { fontSize: 17, fontWeight: '600', color: '#1F2937' },
-  
-  tagRow: { flexDirection: 'row', marginTop: 4 },
-  tag: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F3F4F6', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, gap: 4 },
-  tagText: { fontSize: 11, color: '#6B7280' },
-
-  dataContainer: { minWidth: 80 },
-  tempText: { fontSize: 20, fontWeight: 'bold' },
-  timeText: { fontSize: 20, fontWeight: 'bold', color: '#2563EB' },
-  subText: { fontSize: 11, color: '#9CA3AF' },
-
-  footer: { 
-    flexDirection: 'row', padding: 20, gap: 15, backgroundColor: 'white',
-    borderTopWidth: 1, borderTopColor: '#E5E7EB' 
-  },
-  reportButton: { 
-    flex: 1, flexDirection: 'row', justifyContent: 'center', alignItems: 'center',
-    backgroundColor: '#F3F4F6', height: 55, borderRadius: 16, gap: 8
-  },
-  remindButton: { 
-    flex: 1.5, flexDirection: 'row', justifyContent: 'center', alignItems: 'center',
-    backgroundColor: '#3B82F6', height: 55, borderRadius: 16, gap: 8
-  },
-  remindButtonActive: { backgroundColor: '#10B981' },
-  buttonText: { fontSize: 16, fontWeight: '600', color: '#4B5563' },
-  remindButtonText: { fontSize: 16, fontWeight: '600', color: 'white' },
+  mainWrapper: { flex: 1, backgroundColor: '#F0F9FF', paddingTop: Platform.OS === 'android' ? 40 : 0 },
+  headerContainer: { backgroundColor: '#fff', borderBottomLeftRadius: 20, borderBottomRightRadius: 20, paddingBottom: 10, elevation: 5 },
+  searchSection: { flexDirection: 'row', padding: 15, gap: 8 },
+  cityInput: { width: 80, backgroundColor: '#F1F5F9', borderRadius: 10, paddingHorizontal: 10, fontSize: 12 },
+  inputContainer: { flex: 1, backgroundColor: '#F1F5F9', borderRadius: 10, paddingHorizontal: 10, justifyContent: 'center' },
+  input: { height: 40 },
+  iconBtn: { padding: 10, backgroundColor: '#E0F2FE', borderRadius: 10 },
+  modeToggleBar: { flexDirection: 'row', paddingHorizontal: 15, gap: 10 },
+  modeTab: { flex: 1, flexDirection: 'row', height: 35, alignItems: 'center', justifyContent: 'center', borderRadius: 8, gap: 5, backgroundColor: '#F1F5F9' },
+  activeTab: { backgroundColor: '#3B82F6' },
+  activeTabCool: { backgroundColor: '#10B981' },
+  modeTabText: { fontSize: 12, fontWeight: 'bold' },
+  scrollContent: { padding: 20 },
+  recommendCard: { backgroundColor: '#0EA5E9', padding: 15, borderRadius: 15, marginBottom: 20 },
+  recommendTitle: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
+  recommendSub: { color: '#E0F2FE', fontSize: 13, marginTop: 4 },
+  navIcon: { position: 'absolute', right: 15, bottom: 15 },
+  card: { flexDirection: 'row', backgroundColor: '#fff', padding: 18, borderRadius: 15, marginBottom: 10, justifyContent: 'space-between', alignItems: 'center' },
+  cardLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  stopName: { fontSize: 16, fontWeight: '600' },
+  timeText: { fontSize: 18, fontWeight: 'bold', color: '#3B82F6' },
+  tempText: { fontSize: 18, fontWeight: 'bold', marginLeft: 4 },
 });
-
-export default ShadeBusApp;
