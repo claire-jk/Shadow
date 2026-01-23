@@ -12,7 +12,7 @@ import SunCalc from 'suncalc';
 
 const { width, height } = Dimensions.get('window');
 
-// API Key
+// API Key (OpenRouteService)
 const ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImZhNjJiMDJhOTQ1NTQ3M2Q4NDRiYmMzMjVkM2UxMGVmIiwiaCI6Im11cm11cjY0In0=';
 
 // --- AR 實景組件 ---
@@ -64,9 +64,11 @@ export default function CoolingCorridorApp() {
   const [routePreference, setRoutePreference] = useState<'fast' | 'cool' | 'shaded'>('cool');
   const [timeOffset, setTimeOffset] = useState(0);
   
-  // OSM 建築數據與渲染陰影
+  // 天氣資料
+  const [weather, setWeather] = useState({ temp: 25, condition: 'Loading...' });
   const [realBuildings, setRealBuildings] = useState<any[]>([]);
   const [shadowPolygons, setShadowPolygons] = useState<any[]>([]);
+  const [waterStops, setWaterStops] = useState<any[]>([]); 
   const [isARVisible, setIsARVisible] = useState(false);
   const [rotation, setRotation] = useState({ alpha: 0, beta: 0, gamma: 0 });
 
@@ -77,10 +79,27 @@ export default function CoolingCorridorApp() {
     return () => sub.remove();
   }, []);
 
-  // 當時間偏移或建築數據更新時，重新投影陰影
   useEffect(() => {
     renderShadows();
   }, [timeOffset, realBuildings]);
+
+  useEffect(() => {
+    if (destination) handlePlanRoute();
+  }, [routePreference]);
+
+  // --- 獲取真實氣溫 (Open-Meteo) ---
+  const fetchWeather = async (lat: number, lon: number) => {
+    try {
+      const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`);
+      const data = await res.json();
+      setWeather({
+        temp: data.current_weather.temperature,
+        condition: data.current_weather.is_day ? "晴朗" : "夜間"
+      });
+    } catch (e) {
+      console.log("Weather Fetch Error", e);
+    }
+  };
 
   const autoLocate = async () => {
     setIsLoading(true);
@@ -91,7 +110,8 @@ export default function CoolingCorridorApp() {
       const coord = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
       setStartPoint(coord);
       setStartText('我的目前位置');
-      fetchOSMBuildings(coord.latitude, coord.longitude);
+      fetchWeather(coord.latitude, coord.longitude);
+      fetchOSMData(coord.latitude, coord.longitude);
       mapRef.current?.animateToRegion({ ...coord, latitudeDelta: 0.005, longitudeDelta: 0.005 });
     } catch (e) {
       Alert.alert('錯誤', '無法獲取位置');
@@ -100,86 +120,87 @@ export default function CoolingCorridorApp() {
     }
   };
 
-  // 1. 從 Overpass API 抓取真實建築物
-  const fetchOSMBuildings = async (lat: number, lng: number) => {
-    const query = `
-      [out:json][timeout:25];
-      (
-        way["building"](around:500, ${lat}, ${lng});
-        relation["building"](around:500, ${lat}, ${lng});
-      );
-      out body; >; out skel qt;`;
-    
+  const fetchOSMData = async (lat: number, lng: number) => {
+    const query = `[out:json];(way["building"](around:500,${lat},${lng});node["amenity"="drinking_water"](around:800,${lat},${lng}););out body;>;out skel qt;`;
     try {
       const res = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`);
       const data = await res.json();
-      
       const nodesMap: any = {};
+      const newWaterStops: any[] = [];
       data.elements.forEach((el: any) => {
-        if (el.type === 'node') nodesMap[el.id] = { latitude: el.lat, longitude: el.lon };
+        if (el.type === 'node') {
+          nodesMap[el.id] = { latitude: el.lat, longitude: el.lon };
+          if (el.tags?.amenity === 'drinking_water') newWaterStops.push({ id: el.id, latitude: el.lat, longitude: el.lon });
+        }
       });
-
-      const buildings = data.elements
-        .filter((el: any) => el.type === 'way' && el.nodes)
+      const buildings = data.elements.filter((el: any) => el.type === 'way' && el.nodes && el.tags)
         .map((way: any) => ({
           id: way.id,
           height: parseFloat(way.tags.height) || (parseInt(way.tags['building:levels']) * 3.5) || 12,
           coords: way.nodes.map((nodeId: any) => nodesMap[nodeId]).filter((n: any) => n),
-          isArcade: way.tags.covered === 'yes' || way.tags.arcade === 'yes'
-        }));
-      
+        })).filter((b: any) => b.coords.length > 2);
       setRealBuildings(buildings);
-    } catch (e) {
-      console.log("OSM Fetch Error", e);
-    }
+      setWaterStops(newWaterStops);
+    } catch (e) { console.log(e); }
   };
 
-  // 2. 計算陰影投射
   const renderShadows = () => {
     const date = new Date();
     date.setMinutes(date.getMinutes() + timeOffset);
-    
     const shadows = realBuildings.map(bldg => {
       const sunPos = SunCalc.getPosition(date, bldg.coords[0].latitude, bldg.coords[0].longitude);
       if (sunPos.altitude <= 0) return null;
-
       const shadowLen = (bldg.height / Math.tan(sunPos.altitude)) / 111000;
       const dx = shadowLen * Math.sin(sunPos.azimuth + Math.PI);
       const dy = shadowLen * Math.cos(sunPos.azimuth + Math.PI);
-
-      // 將原始座標偏移生成陰影頂點
-      const projected = bldg.coords.map((c: any) => ({
-        latitude: c.latitude + dy,
-        longitude: c.longitude + dx
-      }));
-
+      const projected = bldg.coords.map((c: any) => ({ latitude: c.latitude + dy, longitude: c.longitude + dx }));
       return [...bldg.coords, ...projected.reverse()];
     }).filter(Boolean);
-
     setShadowPolygons(shadows);
   };
 
+  // --- 關鍵：路徑差異化演算法 ---
   const handlePlanRoute = async () => {
-    if (!destText) return;
+    if (!destText && !destination) return;
     setIsLoading(true);
     try {
-      const destGeo = await Location.geocodeAsync(destText);
-      const finalDest = { latitude: destGeo[0].latitude, longitude: destGeo[0].longitude };
-      setDestination(finalDest);
+      let finalDest = destination;
+      if (!destination) {
+        const destGeo = await Location.geocodeAsync(destText);
+        finalDest = { latitude: destGeo[0].latitude, longitude: destGeo[0].longitude };
+        setDestination(finalDest);
+      }
 
-      const url = `https://api.openrouteservice.org/v2/directions/foot-walking?api_key=${ORS_API_KEY}&start=${startPoint.longitude},${startPoint.latitude}&end=${finalDest.longitude},${finalDest.latitude}`;
+      let profile = 'foot-walking';
+      let preference = 'fastest';
+      let options = '';
+
+      // 根據氣溫動態加重權重
+      const heatFactor = weather.temp > 32 ? 'heavy' : 'normal';
+
+      if (routePreference === 'cool') {
+        // 使用單車模式模擬「避開主幹道」走小徑的效果 (最有效的分流方式)
+        profile = 'cycling-regular'; 
+        preference = 'shortest';
+      } else if (routePreference === 'shaded') {
+        // 強制避開高速公路與主要幹道
+        profile = 'foot-walking';
+        preference = 'shortest';
+        options = '&options={"avoid_features":["highways","steps"]}';
+      }
+
+      const url = `https://api.openrouteservice.org/v2/directions/${profile}?api_key=${ORS_API_KEY}&start=${startPoint.longitude},${startPoint.latitude}&end=${finalDest.longitude},${finalDest.latitude}&preference=${preference}${options}`;
+      
       const res = await fetch(url);
       const json = await res.json();
 
       if (json.features) {
         const points = json.features[0].geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] }));
         setRouteCoords(points);
-        mapRef.current?.fitToCoordinates(points, { edgePadding: { top: 150, bottom: 450, left: 80, right: 80 } });
-        // 到達目的地附近也抓建築
-        fetchOSMBuildings(finalDest.latitude, finalDest.longitude);
+        mapRef.current?.fitToCoordinates(points, { edgePadding: { top: 100, bottom: 450, left: 60, right: 60 } });
       }
     } catch (e) {
-      Alert.alert("錯誤", "路徑規劃失敗");
+      Alert.alert("規劃失敗");
     } finally {
       setIsLoading(false);
       Keyboard.dismiss();
@@ -189,6 +210,14 @@ export default function CoolingCorridorApp() {
   return (
     <View style={styles.container}>
       <View style={styles.searchContainer}>
+        {/* 天氣資訊欄 */}
+        <View style={styles.weatherInfo}>
+          <Text style={[styles.tempText, weather.temp > 30 && { color: '#E74C3C' }]}>
+            🌡️ 當前氣溫: {weather.temp}°C ({weather.condition})
+          </Text>
+          {weather.temp > 30 && <Text style={styles.heatAlert}>建議選擇「涼爽」路徑</Text>}
+        </View>
+
         <View style={styles.inputRow}>
           <TextInput style={styles.input} placeholder="起點: 我的目前位置" value={startText} onChangeText={setStartText} />
           <TouchableOpacity onPress={autoLocate} style={styles.locateBtn}><Text>📍</Text></TouchableOpacity>
@@ -214,11 +243,21 @@ export default function CoolingCorridorApp() {
       <MapView ref={mapRef} style={styles.map} provider={PROVIDER_GOOGLE} showsUserLocation={true}>
         {startPoint && <Marker coordinate={startPoint} title="起點" pinColor="#3498DB" />}
         {destination && <Marker coordinate={destination} title="目的地" pinColor="#E74C3C" />}
+        {waterStops.map(stop => (
+          <Marker key={stop.id} coordinate={stop} title="公共飲水機">
+            <View style={styles.waterMarker}><Text>💧</Text></View>
+          </Marker>
+        ))}
         {shadowPolygons.map((poly, idx) => (
-          <Polygon key={idx} coordinates={poly} fillColor="rgba(0, 0, 0, 0.3)" strokeWidth={0} />
+          <Polygon key={idx} coordinates={poly} fillColor="rgba(0, 0, 0, 0.35)" strokeWidth={0} />
         ))}
         {routeCoords.length > 0 && (
-          <Polyline coordinates={routeCoords} strokeWidth={6} strokeColor={routePreference === 'cool' ? '#2ECC71' : routePreference === 'shaded' ? '#9B59B6' : '#3498DB'} />
+          <Polyline 
+            key={routePreference} 
+            coordinates={routeCoords} 
+            strokeWidth={6} 
+            strokeColor={routePreference === 'cool' ? '#2ECC71' : routePreference === 'shaded' ? '#9B59B6' : '#3498DB'} 
+          />
         )}
       </MapView>
 
@@ -240,6 +279,9 @@ const styles = StyleSheet.create({
   map: { ...StyleSheet.absoluteFillObject },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
   searchContainer: { position: 'absolute', top: 50, left: 15, right: 15, backgroundColor: 'white', borderRadius: 16, padding: 15, zIndex: 100, elevation: 5 },
+  weatherInfo: { marginBottom: 10, borderBottomWidth: 1, borderBottomColor: '#EEE' },
+  tempText: { fontWeight: 'bold', fontSize: 14, color: '#2C3E50' },
+  heatAlert: { fontSize: 11, color: '#E74C3C', marginTop: 2 },
   inputRow: { flexDirection: 'row', alignItems: 'center' },
   input: { flex: 1, height: 45, backgroundColor: '#F8F9FA', borderRadius: 10, paddingHorizontal: 15 },
   locateBtn: { padding: 10 },
@@ -265,4 +307,5 @@ const styles = StyleSheet.create({
   coolBadge: { backgroundColor: 'rgba(46, 204, 113, 0.9)', padding: 10, borderRadius: 8, marginBottom: 10 },
   hotBadge: { backgroundColor: 'rgba(231, 76, 60, 0.9)', padding: 10, borderRadius: 8 },
   badgeText: { color: 'white', fontWeight: 'bold' },
+  waterMarker: { backgroundColor: 'white', borderRadius: 15, padding: 5, borderWidth: 1, borderColor: '#3498DB', elevation: 3 }
 });
