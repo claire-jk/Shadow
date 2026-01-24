@@ -220,14 +220,14 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   overlay: { position: 'absolute', top: 50, left: 15, right: 15 },
   card: { backgroundColor: 'rgba(28, 28, 30, 0.95)', flexDirection: 'row', padding: 18, borderRadius: 20, borderLeftWidth: 10, alignItems: 'center' },
-  cityLabel: { color: '#8e8e93', fontSize: 11, fontWeight: 'bold' },
-  title: { color: 'white', fontSize: 16, fontWeight: 'bold' },
+  cityLabel: { color: '#8e8e93', fontSize: 11,fontFamily:'Zen' },
+  title: { color: 'white', fontSize: 16,fontFamily:'Zen' },
   timerContainer: { alignItems: 'center', minWidth: 60 },
-  timer: { fontSize: 42, fontWeight: '900', lineHeight: 45 },
-  unitText: { color: 'white', fontSize: 12 },
+  timer: { fontSize: 42,fontFamily:'Zen', lineHeight: 45 },
+  unitText: { color: 'white', fontSize: 12,fontFamily:'Zen' },
   buttonGroup: { position: 'absolute', bottom: 40, left: 20, right: 20, flexDirection: 'row', justifyContent: 'space-between' },
   actionBtn: { backgroundColor: '#3a3a3c', flexDirection: 'row', paddingVertical: 12, paddingHorizontal: 20, borderRadius: 30, width: '48%', justifyContent: 'center', alignItems: 'center' },
-  btnText: { color: 'white', marginLeft: 8, fontWeight: 'bold' }
+  btnText: { color: 'white', marginLeft: 8,fontFamily:'Zen' }
 });
 
 export default CoolTurnScreen;
